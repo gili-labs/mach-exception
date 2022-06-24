@@ -3,6 +3,9 @@ import PackageDescription
 
 let package = Package(
     name: "swift-exceptions",
+    platforms: [
+        .macOS(.v12),
+    ],
     products: [
         .library(name: "swift-exceptions", targets: ["swift-exceptions", "mach-exceptions"]),
     ],

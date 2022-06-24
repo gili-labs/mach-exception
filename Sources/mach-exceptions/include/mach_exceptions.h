@@ -8,8 +8,8 @@
 //
 
 #import <Foundation/Foundation.h>
-//#ifdef __APPLE__
-//#import "TargetConditionals.h"
+#ifdef __APPLE__
+#import "TargetConditionals.h"
 #if TARGET_OS_OSX || TARGET_OS_IOS
 
 #import <mach/mach.h>
@@ -21,17 +21,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MachException: NSObject
 
-- (id _Nonnull) init;
+- (nullable id) init: (exception_mask_t) exceptionMask
+      error: (NSError **) error;
 
 - (void) dealloc;
 
-- (BOOL) prepareToListenForException: (exception_mask_t) exceptionMask
-                               error: (NSError **) error;
+- (BOOL) listenWithError: (NSError **) error
+              completion: (void(^)(exception_type_t type,
+                                   mach_exception_code_t code,
+                                   mach_exception_subcode_t subcode)) completion;
 
-- (BOOL) listenForExceptionWithError: (NSError **) error
-                          completion: (void(^)(exception_type_t type,
-                                               mach_exception_code_t code,
-                                               mach_exception_subcode_t subcode)) completion;
+- (void) cancel;
 
 @end
 
@@ -61,13 +61,7 @@ typedef struct {
     
     /// The type of state sent for each exception message.
     thread_state_flavor_t flavors[EXC_TYPES_COUNT];
-    
-    /// Indicates the kernel return status. KERN_SUCCESS if no error occurred.
-    kern_return_t machStatus;
-    
-    /// Indicates the pthread_create return status. `0` if no error occurred.
-    int pthreadStatus;
-    
+        
     /// The object containing the callback.
     void * class;
 
@@ -75,11 +69,24 @@ typedef struct {
     void (* handler)(void *, exception_type_t, mach_exception_code_t, mach_exception_subcode_t);
 } ExceptionContext;
 
-int catchExceptions(ExceptionContext * context);
+@interface MException: NSObject
 
-void catch_exceptions_cleanup(ExceptionContext * context);
+- (id _Nonnull) init;
+
+- (void) dealloc;
+
+- (BOOL) prepareToCatchWithExceptionContext: (ExceptionContext *) context
+                                     thread: (pthread_t *) handler_thread
+                                      error: (NSError **) error;
+
+- (BOOL) catchExceptionWithExceptionContext: (ExceptionContext *) context
+                                      error: (NSError **) error;
+
+- (BOOL) cleanup: (ExceptionContext *) context;
+
+@end
 
 NS_ASSUME_NONNULL_END
 
 #endif /* TARGET_OS_OSX || TARGET_OS_IOS */
-//#endif /* __APPLE__ */
+#endif /* __APPLE__ */

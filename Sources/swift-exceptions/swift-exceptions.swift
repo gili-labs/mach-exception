@@ -38,33 +38,86 @@ public struct ExceptionTypes: OptionSet {
     }
 }
 
+public enum ExceptionError: Error {
+    case badAccess(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case badInstruction(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case arithmetic(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case emulation(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case software(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case breakpoint(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case syscall(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case machSyscall(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case rpcAlert(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case crash(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case resource(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case `guard`(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    case corpseNotify(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+}
+
+internal enum CatchingTask<T> {
+    case exceptionListener(())
+    case operation(T)
+}
+
+internal func listener() async throws -> () {
+    print("listener: started")
+    while true {
+        print("listener: isCancelled: \(Task.isCancelled)")
+        if Task.isCancelled {
+            print("listener: cancelled")
+            return ()
+        }
+    }
+    print("listener: finished")
+    return ()
+}
+
+public func withCatching<OperationResult>(
+    exceptions: ExceptionTypes,
+    operation: @escaping () async throws -> OperationResult) async rethrows -> OperationResult
+{
+    // initialize exception port
+    
+    var operationResult: OperationResult?
+    try await withThrowingTaskGroup(of: CatchingTask<OperationResult>.self) { group in
+        group.addTask {
+            // start listener
+            try await .exceptionListener(listener())
+        }
+        
+        group.addTask {
+            try await .operation(operation())
+        }
+        
+        for try await task in group {
+            switch task {
+            case .exceptionListener:
+                // cancel the operation
+                break
+                
+            case .operation(let result):
+                operationResult = result
+                // cancel the listener
+            }
+        }
+    }
+    print("withCatching: finished")
+    return operationResult!
+}
+
 func getClassPointer<T: AnyObject>(_ object: T) -> UnsafeMutableRawPointer {
     return UnsafeMutableRawPointer(Unmanaged.passUnretained(object).toOpaque())
 }
 
-public class Exception {
-    
-    public enum ExceptionType: Error {
-        case badAccess(mach_exception_code_t, mach_exception_subcode_t)
-        case badInstruction(mach_exception_code_t, mach_exception_subcode_t)
-        case arithmetic(mach_exception_code_t, mach_exception_subcode_t)
-        case emulation(mach_exception_code_t, mach_exception_subcode_t)
-        case software(mach_exception_code_t, mach_exception_subcode_t)
-        case breakpoint(mach_exception_code_t, mach_exception_subcode_t)
-        case syscall(mach_exception_code_t, mach_exception_subcode_t)
-        case machSyscall(mach_exception_code_t, mach_exception_subcode_t)
-        case rpcAlert(mach_exception_code_t, mach_exception_subcode_t)
-        case crash(mach_exception_code_t, mach_exception_subcode_t)
-        case resource(mach_exception_code_t, mach_exception_subcode_t)
-        case `guard`(mach_exception_code_t, mach_exception_subcode_t)
-        case corpseNotify(mach_exception_code_t, mach_exception_subcode_t)
-    }
-
+@objc
+public class Exception: NSObject {
+            
     var handler: ((exception_type_t, mach_exception_code_t, mach_exception_subcode_t) -> Void)?
+    var handlerThread: pthread_t?
     
     public func catching(types: ExceptionTypes,
                          handler: @escaping (exception_type_t, mach_exception_code_t, mach_exception_subcode_t) -> Void,
-                         closure: @escaping () -> Void)
+                         closure: @escaping () -> Void) async
     {
         let previousExclusivity = _swift_disableExclusivityChecking
         let previousReporting = _swift_reportFatalErrorsToDebugger
@@ -74,7 +127,7 @@ public class Exception {
             _swift_reportFatalErrorsToDebugger = previousReporting
             _swift_disableExclusivityChecking = previousExclusivity
         }
-
+        
         self.handler = handler
         
         var context = ExceptionContext(currentExceptionMask: types.exceptionMask,
@@ -84,19 +137,20 @@ public class Exception {
                                        ports: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                        behaviors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                        flavors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-                                       machStatus: KERN_SUCCESS,
-                                       pthreadStatus: 0,
                                        class: getClassPointer(self))
         { (classPointer, type, code, subcode) -> Void in
             let this = Unmanaged<Exception>.fromOpaque(classPointer).takeUnretainedValue()
             this.handler!(type, code, subcode)
         }
-        defer {
-            print("DEFERRING")
-            catch_exceptions_cleanup(&context)
+                
+        let me = MException()
+        do {
+            try me.prepareToCatch(with: &context, thread: &handlerThread)
+            try me.catchException(with: &context)
+        } catch {
+            let error = error as NSError
+            print(error.localizedDescription)
         }
-        
-        catchExceptions(&context)
         closure()
     }
 }

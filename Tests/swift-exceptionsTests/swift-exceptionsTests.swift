@@ -18,12 +18,6 @@ import mach_exceptions
 @testable import swift_exceptions
 
 class swift_exceptions: XCTestCase {
-
-    func testIt() throws {
-        let exception = MachException()
-        XCTAssertNoThrow(try exception.prepareToListen(forException: exception_mask_t(EXC_MASK_BREAKPOINT)))
-        
-    }
     
     func testExceptionTypes() throws {
         XCTAssertEqual(ExceptionTypes.badAccess.rawValue, EXC_MASK_BAD_ACCESS)
@@ -41,21 +35,46 @@ class swift_exceptions: XCTestCase {
         XCTAssertEqual(ExceptionTypes.corpseNotify.rawValue, EXC_MASK_CORPSE_NOTIFY)
     }
     
-    func testCatchMachException() throws {
-        let thread = Thread {
+    func testExceptionError() throws {
+        
+    }
+    
+    func testWithCatching() async throws {
+        let result = try await withCatching(exceptions: []) { () -> String in
+            print("operation: starting")
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            throw ExceptionError.breakpoint(code: 1, subcode: 2)
+//            while true {
+//                print("operation: isCancelled = \(Task.isCancelled)")
+//                if Task.isCancelled {
+//                    print("operation: isCancelled")
+//                    return "FAILURE"
+//                }
+//            }
+            print("operating: ending")
+            return "SUCCESS"
+        }
+        print(result)
+    }
+
+    func testIt() throws {
+        let exception = try XCTUnwrap(MachException(exception_mask_t(EXC_MASK_BREAKPOINT)))
+    }
+    
+    func testCatchMachException() async throws {
+        //let thread = Thread {
             let exception = Exception()
-            exception.catching(types: .breakpoint) { (type, code, subcode) in
+            await exception.catching(types: .breakpoint) { (type, code, subcode) in
                 print("EXCEPTION CAUGHT")
                 print("  type: \(type)")
                 print("  code: \(code)")
                 print("  subcode: \(subcode)")
+                Thread.exit()
             } closure: {
-                print("WHO CARES")
-                
-                //fatalError()
+                fatalError()
             }
-        }
-        thread.start()
-        sleep(2)
-    }            
+        //}
+        //thread.start()
+        sleep(1)
+    }
 }
