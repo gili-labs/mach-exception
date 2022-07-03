@@ -9,6 +9,7 @@
 
 import Foundation
 import Darwin
+import swift_exceptions_tls
 import mach_exceptions
 
 public struct ExceptionTypes: OptionSet {
@@ -54,103 +55,185 @@ public enum ExceptionError: Error {
     case corpseNotify(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
 }
 
-internal enum CatchingTask<T> {
-    case exceptionListener(())
-    case operation(T)
-}
+class Exception<OperationResult> {
 
-internal func listener() async throws -> () {
-    print("listener: started")
-    while true {
-        print("listener: isCancelled: \(Task.isCancelled)")
-        if Task.isCancelled {
-            print("listener: cancelled")
-            return ()
-        }
+    internal let machException: MachException
+    internal let listenerTimeout: mach_msg_timeout_t
+    internal var continuation: UnsafeContinuation<OperationResult, Error>?
+     
+    let previousExclusivity: Bool
+    let previousReporting: Bool
+     
+    public init(exceptions: ExceptionTypes, listenerTimeout: mach_msg_timeout_t = 10) throws {
+        self.machException = try MachException(mask: exceptions.exceptionMask)
+        self.listenerTimeout = listenerTimeout
+
+        previousExclusivity = _swift_disableExclusivityChecking
+        previousReporting = _swift_reportFatalErrorsToDebugger
+        _swift_disableExclusivityChecking = true
+        _swift_reportFatalErrorsToDebugger = false
     }
-    print("listener: finished")
-    return ()
-}
-
-public func withCatching<OperationResult>(
-    exceptions: ExceptionTypes,
-    operation: @escaping () async throws -> OperationResult) async rethrows -> OperationResult
-{
-    // initialize exception port
     
-    var operationResult: OperationResult?
-    try await withThrowingTaskGroup(of: CatchingTask<OperationResult>.self) { group in
-        group.addTask {
-            // start listener
-            try await .exceptionListener(listener())
-        }
-        
-        group.addTask {
-            try await .operation(operation())
-        }
-        
-        for try await task in group {
-            switch task {
-            case .exceptionListener:
-                // cancel the operation
-                break
+    deinit {
+        _swift_reportFatalErrorsToDebugger = previousReporting
+        _swift_disableExclusivityChecking = previousExclusivity
+    }
+     
+    internal enum ExceptionChildTask<T> {
+        case listener(())
+        case operation(T)
+    }
+
+    public func withCatching(operation: @escaping () -> OperationResult) async throws -> OperationResult
+    {
+        return try await ExceptionTLS.$completionHandler.withValue(self.onFailure) {
+            return try await withThrowingTaskGroup(of: ExceptionChildTask<OperationResult>.self) { group in
+                var operationResult: OperationResult?
                 
-            case .operation(let result):
-                operationResult = result
-                // cancel the listener
+                group.addTask { [self] in
+                    return .listener(try listen(withTimeout: listenerTimeout))
+                }
+                
+                group.addTask { [self] in
+                    try await .operation(perform(operation: operation))
+                }
+                
+                for try await task in group {
+                    switch task {
+                    case .listener:
+                        group.cancelAll()
+                        
+                    case .operation(let result):
+                        group.cancelAll()
+                        operationResult = result
+                    }
+                }
+                
+                return operationResult!
             }
         }
     }
-    print("withCatching: finished")
-    return operationResult!
-}
-
-func getClassPointer<T: AnyObject>(_ object: T) -> UnsafeMutableRawPointer {
-    return UnsafeMutableRawPointer(Unmanaged.passUnretained(object).toOpaque())
-}
-
-@objc
-public class Exception: NSObject {
-            
-    var handler: ((exception_type_t, mach_exception_code_t, mach_exception_subcode_t) -> Void)?
-    var handlerThread: pthread_t?
     
-    public func catching(types: ExceptionTypes,
-                         handler: @escaping (exception_type_t, mach_exception_code_t, mach_exception_subcode_t) -> Void,
-                         closure: @escaping () -> Void) async
-    {
-        let previousExclusivity = _swift_disableExclusivityChecking
-        let previousReporting = _swift_reportFatalErrorsToDebugger
-        _swift_disableExclusivityChecking = true
-        _swift_reportFatalErrorsToDebugger = false
-        defer {
-            _swift_reportFatalErrorsToDebugger = previousReporting
-            _swift_disableExclusivityChecking = previousExclusivity
+    internal func listen(withTimeout timeout: mach_msg_timeout_t) throws {
+        while Task.isCancelled == false {
+            do {
+                print("starting to listen")
+                try machException.listen(withTimeout: timeout)
+                print("listener done")
+                break
+            } catch let error as NSError where error.code == MACH_RCV_TIMED_OUT {
+                print("listener timeout")
+                continue
+            } catch let error as NSError {
+                print("listener failed")
+                throw error
+            }
         }
-        
-        self.handler = handler
-        
+    }
+    
+    internal func perform(operation: @escaping () -> OperationResult) async throws -> OperationResult {
+        return try await withUnsafeThrowingContinuation { continuation in
+            self.continuation = continuation
+            defer {
+                self.continuation = nil
+            }
+            let result = operation()
+            print("OPERATION DONE")
+            onSuccess(result)
+        }
+    }
+    
+    internal func onSuccess(_ result: OperationResult) {
+        continuation?.resume(returning: result)
+    }
+    
+    internal func onFailure(_ error: Error?) {
+        print("GOT HERE, GOT HERE, GOT HERE!!!")
+        guard let continuation = self.continuation, let error = error else {
+            fatalError("BIG PROBLEM")
+        }
+        print(error as NSError)
+        continuation.resume(throwing: error)
+    }
+}
+
+public class OldException2 {
+
+    internal var continuation: UnsafeContinuation<(), Error>?
+
+    public func exceptionHandler(_ error: Error?) -> Void {
+        print("GOT HERE, GOT HERE, GOT HERE!!!")
+        guard let continuation = self.continuation, let error = error else {
+            fatalError("BIG PROBLEM")
+        }
+        print(error as NSError)
+        continuation.resume(throwing: error)
+    }
+    
+    var listener: Task<(), Error>?
+    var operation: Task<(), Error>?
+
+    public func catching(types: ExceptionTypes,
+                         closure: @escaping () -> ()) async throws
+    {
+
         var context = ExceptionContext(currentExceptionMask: types.exceptionMask,
                                        currentExceptionPort: 0,
                                        count: 0,
                                        masks: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                        ports: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                        behaviors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-                                       flavors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-                                       class: getClassPointer(self))
-        { (classPointer, type, code, subcode) -> Void in
-            let this = Unmanaged<Exception>.fromOpaque(classPointer).takeUnretainedValue()
-            this.handler!(type, code, subcode)
-        }
+                                       flavors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        
+        await ExceptionTLS.$completionHandler.withValue(self.exceptionHandler) {
+            guard let me = MException() else {
+                fatalError("MException init failed")
+            }
+            do {
+                try me.prepareToCatch(with: &context)
+                //try me.catchException(with: &context)
+                let port = context.currentExceptionPort
+                listener = Task {
+                    while Task.isCancelled == false {
+                        do {
+                            print("starting to listen")
+                            try me.listen(onPort: port, timeout: 10)
+                            print("listener done")
+                            break
+                        } catch let error as NSError where error.code == MACH_RCV_TIMED_OUT {
+                            print("listener timeout")
+                            continue
+                        } catch let error as NSError {
+                            print("listener failed")
+                            throw error
+                        }
+                    }
+                }
+            } catch {
+                let error = error as NSError
+                print(error.localizedDescription)
+            }
+            
+            operation = Task {
+                let previousExclusivity = _swift_disableExclusivityChecking
+                let previousReporting = _swift_reportFatalErrorsToDebugger
+                _swift_disableExclusivityChecking = true
+                _swift_reportFatalErrorsToDebugger = false
+                defer {
+                    _swift_reportFatalErrorsToDebugger = previousReporting
+                    _swift_disableExclusivityChecking = previousExclusivity
+                }
                 
-        let me = MException()
-        do {
-            try me.prepareToCatch(with: &context, thread: &handlerThread)
-            try me.catchException(with: &context)
-        } catch {
-            let error = error as NSError
-            print(error.localizedDescription)
+                return try await withUnsafeThrowingContinuation { continuation in
+                    self.continuation = continuation
+                    defer {
+                        self.continuation = nil
+                        listener?.cancel()
+                    }
+                    closure()
+                    continuation.resume(returning: ())
+                }
+            }
         }
-        closure()
     }
 }

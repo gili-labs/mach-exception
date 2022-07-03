@@ -9,7 +9,10 @@
 
 import Foundation
 
-public enum ExceptionContext {
-    @TaskLocal
-    public static var context: ExceptionContext?
+public typealias CompletionHandler = (Error?) -> Void
+
+@objc
+public class ExceptionTLS: NSObject {
+    @objc @TaskLocal
+    public static var completionHandler: CompletionHandler?
 }

@@ -40,39 +40,23 @@ class swift_exceptions: XCTestCase {
     }
     
     func testWithCatching() async throws {
-        let result = try await withCatching(exceptions: []) { () -> String in
-            print("operation: starting")
-            try await Task.sleep(nanoseconds: 2_000_000_000)
-            throw ExceptionError.breakpoint(code: 1, subcode: 2)
-//            while true {
-//                print("operation: isCancelled = \(Task.isCancelled)")
-//                if Task.isCancelled {
-//                    print("operation: isCancelled")
-//                    return "FAILURE"
-//                }
-//            }
-            print("operating: ending")
-            return "SUCCESS"
+        let exception = try Exception<Any>(exceptions: .breakpoint)
+        _ = try await exception.withCatching { () -> Void in
+            fatalError("TEST")
         }
-        print(result)
     }
 
-    func testIt() throws {
-        let exception = try XCTUnwrap(MachException(exception_mask_t(EXC_MASK_BREAKPOINT)))
-    }
-    
+    // THIS IS OLD!!!
     func testCatchMachException() async throws {
         //let thread = Thread {
-            let exception = Exception()
-            await exception.catching(types: .breakpoint) { (type, code, subcode) in
-                print("EXCEPTION CAUGHT")
-                print("  type: \(type)")
-                print("  code: \(code)")
-                print("  subcode: \(subcode)")
-                Thread.exit()
-            } closure: {
+        let exception = OldException2()
+        do {
+            try await exception.catching(types: .breakpoint) {
                 fatalError()
             }
+        } catch {
+            print(error as NSError)
+        }
         //}
         //thread.start()
         sleep(1)

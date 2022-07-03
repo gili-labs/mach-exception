@@ -18,6 +18,8 @@
 #include "mach_excServer.h"
 #include "mach_exceptions.h"
 
+@import swift_exceptions_tls;
+
 // Determine whether a given exception context has been used by thread_swap_exception_ports
 // to store an old set of masks.
 //
@@ -69,18 +71,17 @@ static void make_exception_context_key() {
 
 static void exc_handler(exception_type_t type,
                         mach_exception_code_t code,
-                        mach_exception_subcode_t subcode,
-                        void * class,
-                        void (* handler)(void *, exception_type_t, mach_exception_code_t, mach_exception_subcode_t)) {
-    __uint64_t threadid;
-    pthread_threadid_np(pthread_self(), &threadid);
-    printf("exc_handler: threadid: %llu\n", threadid);
-//    if (info->handler != NULL) {
-//        info->handler(info->class, info->exception, info->code, info->subcode);
-//    }
-//    free(info);
-    handler(class, type, code, subcode);
-    //pthread_exit(NULL);
+                        mach_exception_subcode_t subcode)
+{
+    printf("exc_handler: start\n");
+    void (^ _Nullable completion)(NSError * _Nullable __strong) = ExceptionTLS.completionHandler;
+    NSString * domain = @"com.gili-labs.exceptions";
+    NSDictionary * userInfo = @{
+        ExceptionCode : [NSNumber numberWithLongLong: code],
+        ExceptionSubcode : [NSNumber numberWithLongLong: subcode]
+    };
+    NSError * error = [NSError errorWithDomain: domain code: type userInfo: userInfo];
+    completion(error);
 }
 
 kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
@@ -128,27 +129,6 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
                                                         thread_state_t new_state,
                                                         mach_msg_type_number_t *new_stateCnt)
 {
-    __uint64_t threadid;
-    pthread_threadid_np(pthread_self(), &threadid);
-    fprintf(stderr, "catch_mach_exception_raise_state_identity, threadid: %llu\n", threadid);
-
-    ExceptionContext * context = pthread_getspecific(exception_context_key);
-    if (context == NULL) {
-        return KERN_FAILURE;
-    }
-
-//    ExceptionContext * other = Exception.context;
-    
-//    exception_info_t * info = malloc(sizeof(exception_info_t));
-//    if (info == NULL) {
-//        return KERN_FAILURE;
-//    }
-//    info->exception = exception;
-//    info->code = code[0];
-//    info->code = code[1];
-//    info->class = context->class;
-//    info->handler = context->handler;
-
 #if defined (__arm__) || defined (__arm64__)
     _STRUCT_ARM_THREAD_STATE64 * old_thread_state = (_STRUCT_ARM_THREAD_STATE64 *)(void *) old_state;
     _STRUCT_ARM_THREAD_STATE64 * new_thread_state = (_STRUCT_ARM_THREAD_STATE64 *)(void *) new_state;
@@ -159,8 +139,7 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     new_thread_state->__x[0] = (__uint64_t) exception;
     new_thread_state->__x[1] = (__uint64_t) code[0];
     new_thread_state->__x[2] = (__uint64_t) code[1];
-    new_thread_state->__x[3] = (__uint64_t) context->class;
-    new_thread_state->__x[4] = (__uint64_t) context->handler;
+
 #elif defined (__i386__) || defined(__x86_64__)
     _STRUCT_X86_THREAD_STATE64 * old_thread_state = (_STRUCT_X86_THREAD_STATE64 *)(void *) old_state;
     _STRUCT_X86_THREAD_STATE64 * new_thread_state = (_STRUCT_X86_THREAD_STATE64 *)(void *) new_state;
@@ -174,8 +153,6 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     new_thread_state->__rdi = (__uint64_t) exception;
     new_thread_state->__rsi = (__uint64_t) code[0];
     new_thread_state->__rdx = (__uint64_t) code[1];
-    new_thread_state->__rcx = (__uint64_t) context->class;
-    new_thread_state->__r8  = (__uint64_t) context->handler;
 #endif
     printf("catch_mach_exception_raise_state_identity: done\n");
     return KERN_SUCCESS;
@@ -192,7 +169,6 @@ static void * exception_server(void * arg) {
     pthread_once(&exception_context_key_once, make_exception_context_key);
     pthread_setspecific(exception_context_key, arg);
 
-    //rc = mach_msg_server_once(mach_exc_server, MACH_MSG_SIZE_RELIABLE, context->currentExceptionPort, 0);
     rc = mach_msg_server_once_with_timeout(mach_exc_server,
                                            MACH_MSG_SIZE_RELIABLE,
                                            context->currentExceptionPort,
@@ -291,7 +267,7 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
 
 @implementation MException
 
-- (id _Nonnull) init
+- (instancetype _Nullable) init
 {
     self = [super init];
     return self;
@@ -303,7 +279,6 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
 }
 
 - (BOOL) prepareToCatchWithExceptionContext: (ExceptionContext *) context
-                                     thread: (pthread_t *) handler_thread
                                       error: (NSError **) error
 {
     __uint64_t threadid;
@@ -327,26 +302,7 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
         *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
         return false;
     }
-    
-    int status;
-    pthread_t thread;
-    status = pthread_create(&thread, NULL, exception_server, context);
-    if (status != 0) {
-        *error = [NSError errorWithDomain: NSPOSIXErrorDomain code:status userInfo: nil];
-        return false;
-    }
-    
-    return true;
-}
 
-- (BOOL) catchExceptionWithExceptionContext: (ExceptionContext *) context
-                                      error: (NSError **) error
-{
-    __uint64_t threadid;
-    pthread_threadid_np(pthread_self(), &threadid);
-    printf("catchExceptionWithExceptionContext: threadid: %llu\n", threadid);
-
-    kern_return_t code;
 #if defined (__i386__) || defined(__x86_64__)
     thread_state_flavor_t native_thread_state = x86_THREAD_STATE64;
 #elif defined (__arm__) || defined (__arm64__)
@@ -368,6 +324,20 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
         *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
         return false;
     }
+    
+    return true;
+}
+
+- (BOOL) catchExceptionWithExceptionContext: (ExceptionContext *) context
+                                      error: (NSError **) error
+{
+    int status;
+    pthread_t thread;
+    status = pthread_create(&thread, NULL, exception_server, context);
+    if (status != 0) {
+        *error = [NSError errorWithDomain: NSPOSIXErrorDomain code:status userInfo: nil];
+        return false;
+    }
 
     return true;
 }
@@ -377,74 +347,84 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
     return false;
 }
 
+- (BOOL) listenOnPort: (mach_port_t) port
+              timeout: (mach_msg_timeout_t) timeout
+                error: (NSError **) error
+{
+    mach_msg_return_t code;
+    code = mach_msg_server_once_with_timeout(mach_exc_server,
+                                             MACH_MSG_SIZE_RELIABLE,
+                                             port,
+                                             MACH_RCV_TIMEOUT,
+                                             timeout);
+    if (code != MACH_MSG_SUCCESS) {
+        *error = [NSError errorWithDomain: NSMachErrorDomain code: code userInfo: nil];
+        return false;
+    }
+    
+    *error = nil;
+    return true;
+}
+
 @end
 
 //
 @implementation MachException
 {
-@private
-    exception_mask_t currentExceptionMask;
-    mach_port_t currentExceptionPort;
+    mach_port_t port;
     mach_msg_type_number_t count;
     exception_mask_t masks[EXC_TYPES_COUNT];
     mach_port_t ports[EXC_TYPES_COUNT];
     exception_behavior_t behaviors[EXC_TYPES_COUNT];
     thread_state_flavor_t flavors[EXC_TYPES_COUNT];
-    void (^handler)(exception_type_t type,
-                    mach_exception_code_t code,
-                    mach_exception_subcode_t subcode);
-    BOOL isCancelled;
 }
 
-- (id) init: (exception_mask_t) exceptionMask
-      error: (NSError **) error
+- (instancetype _Nullable) initWithMask: (exception_mask_t) mask
+                                  error: (NSError **) error
 {
     self = [super init];
-    
-    kern_return_t code;
-    
-    code = mach_port_allocate(mach_task_self_,
-                              MACH_PORT_RIGHT_RECEIVE,
-                              &currentExceptionPort);
-    if (code != KERN_SUCCESS) {
-        *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
-        return nil;
-    }
-    
-    code = mach_port_insert_right(mach_task_self_,
-                                  currentExceptionPort,
-                                  currentExceptionPort,
-                                  MACH_MSG_TYPE_MAKE_SEND);
-    if (code != KERN_SUCCESS) {
-        mach_port_deallocate(mach_task_self_, currentExceptionPort);
-        *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
-        return nil;
-    }
-    
+    if (self) {
+        self.mask = mask;
+        
+        kern_return_t code;
+        
+        code = mach_port_allocate(mach_task_self_, MACH_PORT_RIGHT_RECEIVE, &port);
+        if (code != KERN_SUCCESS) {
+            *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
+            return nil;
+        }
+        
+        code = mach_port_insert_right(mach_task_self_, port, port, MACH_MSG_TYPE_MAKE_SEND);
+        if (code != KERN_SUCCESS) {
+            mach_port_deallocate(mach_task_self_, port);
+            *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
+            return nil;
+        }
+        
 #if defined (__i386__) || defined(__x86_64__)
-    thread_state_flavor_t nativeThreadState = x86_THREAD_STATE64;
+        thread_state_flavor_t nativeThreadState = x86_THREAD_STATE64;
 #elif defined (__arm__) || defined (__arm64__)
-    thread_state_flavor_t nativeThreadState = ARM_THREAD_STATE64;
+        thread_state_flavor_t nativeThreadState = ARM_THREAD_STATE64;
 #else
 #error Unsupported architecture
 #endif
-    code = task_swap_exception_ports(mach_task_self_,
-                                     currentExceptionMask,
-                                     currentExceptionPort,
-                                     EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES,
-                                     nativeThreadState,
-                                     masks,
-                                     &count,
-                                     ports,
-                                     behaviors,
-                                     flavors);
-    if (code != KERN_SUCCESS) {
-        mach_port_deallocate(mach_task_self_, currentExceptionPort);
-        *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
-        return nil;
+        code = task_swap_exception_ports(mach_task_self_,
+                                         self.mask,
+                                         port,
+                                         EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES,
+                                         nativeThreadState,
+                                         masks,
+                                         &count,
+                                         ports,
+                                         behaviors,
+                                         flavors);
+        if (code != KERN_SUCCESS) {
+            mach_port_deallocate(mach_task_self_, port);
+            *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
+            return nil;
+        }
     }
     
-    isCancelled = false;
     *error = nil;
     return self;
 }
@@ -452,7 +432,7 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
 - (void) dealloc
 {
     task_swap_exception_ports(mach_task_self_,
-                              currentExceptionMask,
+                              self.mask,
                               0,
                               EXCEPTION_DEFAULT,
                               THREAD_STATE_NONE,
@@ -462,26 +442,25 @@ BOOL catchException(ExceptionContext * context, NSError ** error) {
                               behaviors,
                               flavors);
     
-    mach_port_deallocate(mach_task_self_, currentExceptionPort);
+    mach_port_deallocate(mach_task_self_, port);
 }
 
-- (BOOL) listenWithError: (NSError **) error
-              completion: (void(^)(exception_type_t type,
-                                   mach_exception_code_t code,
-                                   mach_exception_subcode_t subcode)) completion;
+- (BOOL) listenWithTimeout: (mach_msg_timeout_t) timeout
+                     error: (NSError **) error
 {
-    kern_return_t code;
+    mach_msg_return_t code;
+    code = mach_msg_server_once_with_timeout(mach_exc_server,
+                                             MACH_MSG_SIZE_RELIABLE,
+                                             port,
+                                             MACH_RCV_TIMEOUT,
+                                             timeout);
+    if (code != MACH_MSG_SUCCESS) {
+        *error = [NSError errorWithDomain: NSMachErrorDomain code: code userInfo: nil];
+        return false;
+    }
     
-//    code = mach_msg_server_once(mach_exc_server, MACH_MSG_SIZE_RELIABLE, context->currentExceptionPort, 0);
-//    if (code != MACH_MSG_SUCCESS) {
-//        return
-//    }
-
-}
-
-- (void) cancel
-{
-    isCancelled = true;
+    *error = nil;
+    return true;
 }
 
 @end

@@ -19,19 +19,21 @@ extern bool _swift_reportFatalErrorsToDebugger;
 
 NS_ASSUME_NONNULL_BEGIN
 
+NSErrorDomain const ExceptionErrorDomain = @"com.gili-labs.exceptions";
+NSErrorUserInfoKey const ExceptionCode = @"code";
+NSErrorUserInfoKey const ExceptionSubcode = @"subcode";
+
 @interface MachException: NSObject
 
-- (nullable id) init: (exception_mask_t) exceptionMask
-      error: (NSError **) error;
+@property exception_mask_t mask;
+
+- (instancetype _Nullable) initWithMask: (exception_mask_t) mask
+                                  error: (NSError **) error;
 
 - (void) dealloc;
 
-- (BOOL) listenWithError: (NSError **) error
-              completion: (void(^)(exception_type_t type,
-                                   mach_exception_code_t code,
-                                   mach_exception_subcode_t subcode)) completion;
-
-- (void) cancel;
+- (BOOL) listenWithTimeout: (mach_msg_timeout_t) timeout
+                     error: (NSError **) error;
 
 @end
 
@@ -61,26 +63,23 @@ typedef struct {
     
     /// The type of state sent for each exception message.
     thread_state_flavor_t flavors[EXC_TYPES_COUNT];
-        
-    /// The object containing the callback.
-    void * class;
-
-    /// The callback invoked when the Mach excpetion server receives an exception.
-    void (* handler)(void *, exception_type_t, mach_exception_code_t, mach_exception_subcode_t);
 } ExceptionContext;
 
 @interface MException: NSObject
 
-- (id _Nonnull) init;
+- (instancetype _Nullable) init;
 
 - (void) dealloc;
 
 - (BOOL) prepareToCatchWithExceptionContext: (ExceptionContext *) context
-                                     thread: (pthread_t *) handler_thread
                                       error: (NSError **) error;
 
 - (BOOL) catchExceptionWithExceptionContext: (ExceptionContext *) context
                                       error: (NSError **) error;
+
+- (BOOL) listenOnPort: (mach_port_t) port
+              timeout: (mach_msg_timeout_t) timeout
+                error: (NSError **) error;
 
 - (BOOL) cleanup: (ExceptionContext *) context;
 

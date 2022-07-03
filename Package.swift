@@ -7,7 +7,14 @@ let package = Package(
         .macOS(.v12),
     ],
     products: [
-        .library(name: "swift-exceptions", targets: ["swift-exceptions", "mach-exceptions"]),
+        .library(
+            name: "swift-exceptions",
+            targets: [
+                "swift-exceptions",
+                "mach-exceptions",
+                "swift-exceptions-tls",
+            ]
+        ),
     ],
     dependencies: [
     ],
@@ -16,14 +23,24 @@ let package = Package(
             name: "swift-exceptions",
             dependencies: [
                 .target(name: "mach-exceptions"),
+                .target(name: "swift-exceptions-tls"),
             ]
         ),
         .target(
-            name: "mach-exceptions"
+            name: "mach-exceptions",
+            dependencies: [
+                .target(name: "swift-exceptions-tls"),
+            ]
+        ),
+        .target(
+            name: "swift-exceptions-tls"
         ),
         .testTarget(
             name: "swift-exceptionsTests",
-            dependencies: ["swift-exceptions", "mach-exceptions"]
+            dependencies: [
+                "swift-exceptions",
+                "mach-exceptions",
+            ]
         ),
     ]
 )
