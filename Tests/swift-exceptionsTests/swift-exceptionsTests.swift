@@ -41,24 +41,36 @@ class swift_exceptions: XCTestCase {
     
     func testWithCatching() async throws {
         let exception = try Exception<Any>(exceptions: .breakpoint)
-        _ = try await exception.withCatching { () -> Void in
-            fatalError("TEST")
+        do {
+            _ = try await exception.withCatching { () -> Void in
+                fatalError("TEST")
+            }
+        } catch {
+            print("exception error = \(error)")
         }
     }
 
     // THIS IS OLD!!!
     func testCatchMachException() async throws {
-        //let thread = Thread {
-        let exception = OldException2()
         do {
+            let exception = OldException2()
             try await exception.catching(types: .breakpoint) {
-                fatalError()
+                fatalError("DIED!!!")
+//                self.chickenOut()
+//                print("BLAH BLAH BLAH")
             }
         } catch {
-            print(error as NSError)
+            print("exception error = \(error)")
         }
-        //}
-        //thread.start()
-        sleep(1)
+        print("END OF TEST")
+    }
+    
+    func chickenOut() {
+        for i in 0 ..< 10 {
+            if i == 7 {
+                fatalError("SEVEN!!!")
+            }
+            print("chickenOut: \(i)")
+        }
     }
 }

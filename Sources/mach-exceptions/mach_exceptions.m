@@ -134,7 +134,6 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     _STRUCT_ARM_THREAD_STATE64 * new_thread_state = (_STRUCT_ARM_THREAD_STATE64 *)(void *) new_state;
     memcpy((void *) new_state, (void *) old_state, ARM_THREAD_STATE64_COUNT * 4);
     *new_stateCnt = old_stateCnt;
-    new_thread_state->__lr = old_thread_state->__pc;
     arm_thread_state64_set_pc_fptr(*new_thread_state, exc_handler);
     new_thread_state->__x[0] = (__uint64_t) exception;
     new_thread_state->__x[1] = (__uint64_t) code[0];
@@ -146,9 +145,10 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     // Note: stateCnt specifies the size of the state in 4-byte words.
     memcpy((void *) new_state, (void *) old_state, x86_THREAD_STATE64_COUNT * 4);
     *new_stateCnt = old_stateCnt;
-    new_thread_state->__rsp -= sizeof(__uint64_t);
-    __uint64_t * rsp = (__uint64_t *) new_thread_state->__rsp;
-    *rsp = old_thread_state->__rip;
+// NEED TO TEST THIS ON A MACHINE WITH AN x86_64 PROCESSOR
+//    new_thread_state->__rsp -= sizeof(__uint64_t);
+//    __uint64_t * rsp = (__uint64_t *) new_thread_state->__rsp;
+//    *rsp = old_thread_state->__rip;
     new_thread_state->__rip = (__uint64_t) exc_handler;
     new_thread_state->__rdi = (__uint64_t) exception;
     new_thread_state->__rsi = (__uint64_t) code[0];

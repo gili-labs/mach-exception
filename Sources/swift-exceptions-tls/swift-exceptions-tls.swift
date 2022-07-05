@@ -9,7 +9,7 @@
 
 import Foundation
 
-public typealias CompletionHandler = (Error?) -> Void
+public typealias CompletionHandler = (Error) -> Void
 
 @objc
 public class ExceptionTLS: NSObject {

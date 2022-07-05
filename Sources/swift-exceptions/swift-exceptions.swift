@@ -53,13 +53,47 @@ public enum ExceptionError: Error {
     case resource(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
     case `guard`(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
     case corpseNotify(code: mach_exception_code_t, subcode: mach_exception_subcode_t)
+    
+    internal init?(_ error: Error) {
+        let error = error as NSError
+        guard error.domain == "com.gili-labs.exceptions" else {
+            return nil
+        }
+
+        let type: exception_type_t = exception_type_t(error.code)
+        
+        guard let code = error.userInfo["code"] as? mach_exception_code_t else {
+            return nil
+        }
+        
+        guard let subcode = error.userInfo["subcode"] as? mach_exception_subcode_t else {
+            return nil
+        }
+
+        switch type {
+        case EXC_BAD_ACCESS: self = .badAccess(code: code, subcode: subcode)
+        case EXC_BAD_INSTRUCTION: self = .badInstruction(code: code, subcode: subcode)
+        case EXC_ARITHMETIC: self = .arithmetic(code: code, subcode: subcode)
+        case EXC_EMULATION: self = .emulation(code: code, subcode: subcode)
+        case EXC_SOFTWARE: self = .software(code: code, subcode: subcode)
+        case EXC_BREAKPOINT: self = .breakpoint(code: code, subcode: subcode)
+        case EXC_SYSCALL: self = .syscall(code: code, subcode: subcode)
+        case EXC_MACH_SYSCALL: self = .machSyscall(code: code, subcode: subcode)
+        case EXC_RPC_ALERT: self = .rpcAlert(code: code, subcode: subcode)
+        case EXC_CRASH: self = .crash(code: code, subcode: subcode)
+        case EXC_RESOURCE: self = .resource(code: code, subcode: subcode)
+        case EXC_GUARD: self = .`guard`(code: code, subcode: subcode)
+        case EXC_CORPSE_NOTIFY: self = .corpseNotify(code: code, subcode: subcode)
+        default: return nil
+        }
+    }
 }
 
 class Exception<OperationResult> {
 
     internal let machException: MachException
     internal let listenerTimeout: mach_msg_timeout_t
-    internal var continuation: UnsafeContinuation<OperationResult, Error>?
+    internal var error: Error?
      
     let previousExclusivity: Bool
     let previousReporting: Bool
@@ -79,32 +113,34 @@ class Exception<OperationResult> {
         _swift_disableExclusivityChecking = previousExclusivity
     }
      
-    internal enum ExceptionChildTask<T> {
+    internal enum ChildTask<T> {
         case listener(())
         case operation(T)
     }
 
     public func withCatching(operation: @escaping () -> OperationResult) async throws -> OperationResult
     {
-        return try await ExceptionTLS.$completionHandler.withValue(self.onFailure) {
-            return try await withThrowingTaskGroup(of: ExceptionChildTask<OperationResult>.self) { group in
+        return try await ExceptionTLS.$completionHandler.withValue(self.onException) {
+            return try await withThrowingTaskGroup(of: ChildTask<OperationResult>.self) { group in
                 var operationResult: OperationResult?
                 
                 group.addTask { [self] in
                     return .listener(try listen(withTimeout: listenerTimeout))
                 }
                 
-                group.addTask { [self] in
-                    try await .operation(perform(operation: operation))
+                group.addTask {
+                    .operation(operation())
                 }
                 
                 for try await task in group {
                     switch task {
                     case .listener:
-                        group.cancelAll()
+                        print("LISTENER DONE")
+                        //group.cancelAll()
                         
                     case .operation(let result):
-                        group.cancelAll()
+                        print("OPERATION DONE")
+                        //group.cancelAll()
                         operationResult = result
                     }
                 }
@@ -131,48 +167,25 @@ class Exception<OperationResult> {
         }
     }
     
-    internal func perform(operation: @escaping () -> OperationResult) async throws -> OperationResult {
-        return try await withUnsafeThrowingContinuation { continuation in
-            self.continuation = continuation
-            defer {
-                self.continuation = nil
-            }
-            let result = operation()
-            print("OPERATION DONE")
-            onSuccess(result)
-        }
-    }
-    
-    internal func onSuccess(_ result: OperationResult) {
-        continuation?.resume(returning: result)
-    }
-    
-    internal func onFailure(_ error: Error?) {
+    internal func onException(_ error: Error) -> Void {
         print("GOT HERE, GOT HERE, GOT HERE!!!")
-        guard let continuation = self.continuation, let error = error else {
-            fatalError("BIG PROBLEM")
-        }
-        print(error as NSError)
-        continuation.resume(throwing: error)
+        self.error = error
     }
 }
 
 public class OldException2 {
 
-    internal var continuation: UnsafeContinuation<(), Error>?
-
-    public func exceptionHandler(_ error: Error?) -> Void {
-        print("GOT HERE, GOT HERE, GOT HERE!!!")
-        guard let continuation = self.continuation, let error = error else {
-            fatalError("BIG PROBLEM")
-        }
-        print(error as NSError)
-        continuation.resume(throwing: error)
-    }
-    
     var listener: Task<(), Error>?
     var operation: Task<(), Error>?
+    var error: Error?
 
+    public func exceptionHandler(_ error: Error) -> Void {
+//        print("GOT HERE, GOT HERE, GOT HERE!!!")
+//        print(error as NSError)
+        self.error = error
+        print(Thread.callStackReturnAddresses)
+    }
+    
     public func catching(types: ExceptionTypes,
                          closure: @escaping () -> ()) async throws
     {
@@ -185,13 +198,13 @@ public class OldException2 {
                                        behaviors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                        flavors: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
         
-        await ExceptionTLS.$completionHandler.withValue(self.exceptionHandler) {
+        ExceptionTLS.$completionHandler.withValue(self.exceptionHandler) {
             guard let me = MException() else {
                 fatalError("MException init failed")
             }
+            
             do {
                 try me.prepareToCatch(with: &context)
-                //try me.catchException(with: &context)
                 let port = context.currentExceptionPort
                 listener = Task {
                     while Task.isCancelled == false {
@@ -224,16 +237,21 @@ public class OldException2 {
                     _swift_disableExclusivityChecking = previousExclusivity
                 }
                 
-                return try await withUnsafeThrowingContinuation { continuation in
-                    self.continuation = continuation
-                    defer {
-                        self.continuation = nil
-                        listener?.cancel()
-                    }
-                    closure()
-                    continuation.resume(returning: ())
+                defer {
+                    print("DEFER")
+                    listener?.cancel()
                 }
+                
+                closure()
+                print("DONE")
             }
+        }
+        
+        let result = await listener?.result
+        print("listener: \(await listener?.result)")
+        print("operation: \(await operation?.result)")
+        if let error = self.error, let exceptionError = ExceptionError(error) {
+            throw exceptionError
         }
     }
 }
