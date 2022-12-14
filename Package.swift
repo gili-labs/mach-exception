@@ -1,18 +1,17 @@
-// swift-tools-version: 5.6
+// swift-tools-version: 5.7
 import PackageDescription
 
 let package = Package(
-    name: "swift-exceptions",
+    name: "mach-exception",
     platforms: [
         .macOS(.v12),
     ],
     products: [
         .library(
-            name: "swift-exceptions",
+            name: "mach-exception",
             targets: [
-                "swift-exceptions",
-                "mach-exceptions",
-                "swift-exceptions-tls",
+                "mach-exception",
+                "mach-exception-helper",
             ]
         ),
     ],
@@ -20,26 +19,21 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "swift-exceptions",
+            name: "mach-exception",
             dependencies: [
-                .target(name: "mach-exceptions"),
-                .target(name: "swift-exceptions-tls"),
+                .target(name: "mach-exception-helper"),
             ]
         ),
         .target(
-            name: "mach-exceptions",
+            name: "mach-exception-helper",
             dependencies: [
-                .target(name: "swift-exceptions-tls"),
             ]
-        ),
-        .target(
-            name: "swift-exceptions-tls"
         ),
         .testTarget(
-            name: "swift-exceptionsTests",
+            name: "mach-exceptionTests",
             dependencies: [
-                "swift-exceptions",
-                "mach-exceptions",
+                "mach-exception",
+                "mach-exception-helper",
             ]
         ),
     ]

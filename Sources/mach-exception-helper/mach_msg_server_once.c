@@ -2,7 +2,7 @@
 // Copyright © 2022 Gili Labs. All rights reserved.
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// swift-exceptions
+// mach-exception
 // mach_msg_server_once.c
 // Created by Patrick Gili on 6/15/22.
 //

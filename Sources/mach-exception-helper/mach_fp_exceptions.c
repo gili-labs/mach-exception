@@ -2,7 +2,7 @@
 // Copyright © 2022 Gili Labs. All rights reserved.
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// 
+// mach-exception
 // mach_fp_exceptions.c
 // Created by Patrick Gili on 5/18/22.
 //
@@ -18,10 +18,10 @@
 #endif
 
 //***
-int feenableexception(unsigned int excepts) {
+__uint64_t feenableexception(unsigned int excepts) {
     fenv_t fenv;
-    unsigned int new_excepts = excepts & FE_ALL_EXCEPT;
-    unsigned int old_excepts;
+    __uint64_t new_excepts = excepts & FE_ALL_EXCEPT;
+    __uint64_t old_excepts;
     
     if (fegetenv(&fenv)) {
         return -1;
@@ -38,10 +38,10 @@ int feenableexception(unsigned int excepts) {
     return fesetenv(&fenv) ? -1 : old_excepts;
 }
 
-int fedisableexception(unsigned int excepts) {
+__uint64_t fedisableexception(unsigned int excepts) {
     fenv_t fenv;
-    unsigned int new_excepts = excepts & FE_ALL_EXCEPT;
-    unsigned int old_excepts;
+    __uint64_t new_excepts = excepts & FE_ALL_EXCEPT;
+    __uint64_t old_excepts;
     
     if (fegetenv(&fenv)) {
         return -1;
