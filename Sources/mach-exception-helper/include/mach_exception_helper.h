@@ -40,6 +40,14 @@ FOUNDATION_EXPORT NSErrorUserInfoKey const MachExceptionCode;
 /// A key identifying a Mach exception's subcode in an a NSError object's userinfo dictionary.
 FOUNDATION_EXTERN NSErrorUserInfoKey const MachExceptionSubcode;
 
+// MARK: - MachException
+
+@interface MachException: NSException
+@property exception_type_t type;
+@property mach_exception_data_type_t code;
+@property mach_exception_data_type_t subcode;
+@end
+
 // MARK: - MachExceptionHelperDependencies
 
 // A type defining MachExceptionHelper's dependencies. This type supports content dependency injection

@@ -39,28 +39,98 @@ final class mach_exception_helper_tests: XCTestCase {
         XCTAssertNoThrow(try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies))
     }
     
-    func testMachExceptionHelperSuperInitFailure() throws {
+    func testSuperInitFailure() throws {
         let dependencies = TestableDependencies()
         dependencies.failureOptions = [.superInitFailure]
         XCTAssertThrowsError(try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies))
     }
     
-    func testMachExceptionHelperPortAllocateFailure() throws {
+    func testMachPortAllocateFailure() throws {
         let dependencies = TestableDependencies()
         dependencies.failureOptions = [.portAllocateFailure]
         XCTAssertThrowsError(try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies))
     }
     
-    func testMachExceptionHelperPortInsertRightFailure() throws {
+    func testMachPortInsertRightFailure() throws {
         let dependencies = TestableDependencies()
         dependencies.failureOptions = [.portInsertRightFailure]
         XCTAssertThrowsError(try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies))
     }
     
-    func testMachExceptionHelperThreadSwapExceptionPortsFailure() throws {
+    func testMachThreadSwapExceptionPortsFailure() throws {
         let dependencies = TestableDependencies()
         dependencies.failureOptions = [.threadSwapExceptionPortsFailure]
         XCTAssertThrowsError(try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies))
+    }
+    
+    func testPerformWithNoException() throws {
+        let dependencies = TestableDependencies()
+        let helper = try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies)
+        var tryBlockWasExecuted = false
+        var finallyBlockWasExecuted = false
+        XCTAssertNoThrow(
+            try helper.perform {
+                tryBlockWasExecuted = true
+            } finally: {
+                finallyBlockWasExecuted = true
+            })
+        XCTAssert(tryBlockWasExecuted)
+        XCTAssert(finallyBlockWasExecuted)
+    }
+
+    func testPerformWithMachException() throws {
+        let dependencies = TestableDependencies()
+        let helper = try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies)
+        var tryBlockWasEntered = false
+        var tryBlockWasExecuted = false
+        var finallyBlockWasExecuted = false
+        var performError: NSError?
+        XCTAssertThrowsError(
+            try helper.perform {
+                tryBlockWasEntered = true
+                let name: NSExceptionName = NSExceptionName(rawValue: MachExceptionErrorDomain)
+                let machException = MachException(name: name, reason: "Mach exception")
+                machException.type = EXC_BAD_ACCESS
+                machException.raise()
+                tryBlockWasExecuted = true
+            } finally: {
+                finallyBlockWasExecuted = true
+            }) { error in
+                performError = error as NSError
+            }
+        XCTAssert(tryBlockWasEntered)
+        XCTAssertFalse(tryBlockWasExecuted)
+        XCTAssert(finallyBlockWasExecuted)
+        let error = try XCTUnwrap(performError)
+        let machExceptionError = try XCTUnwrap(MachExceptionError(error))
+        XCTAssertEqual(machExceptionError.type, .badAccess)
+    }
+    
+    func testPerformWithOtherException() throws {
+        let dependencies = TestableDependencies()
+        let helper = try MachExceptionHelper(mask: exception_mask_t(EXC_MASK_BAD_ACCESS), dependencies: dependencies)
+        var tryBlockWasEntered = false
+        var tryBlockWasExecuted = false
+        var finallyBlockWasExecuted = false
+        var performError: NSError?
+        XCTAssertThrowsError(
+            try helper.perform {
+                tryBlockWasEntered = true
+                let exception = NSException(name: .genericException, reason: "Generic exception")
+                exception.raise()
+                tryBlockWasExecuted = true
+            } finally: {
+                finallyBlockWasExecuted = true
+            }) { error in
+                performError = error as NSError
+            }
+        XCTAssert(tryBlockWasEntered)
+        XCTAssertFalse(tryBlockWasExecuted)
+        XCTAssert(finallyBlockWasExecuted)
+        let error = try XCTUnwrap(performError)
+        XCTAssertEqual(NSExceptionName(rawValue: error.domain), NSExceptionName.genericException)
+        XCTAssertEqual(error.code, 0)
+        XCTAssertEqual(error.userInfo.count, 0)
     }
 }
 

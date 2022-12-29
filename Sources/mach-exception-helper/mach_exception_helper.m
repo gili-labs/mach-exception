@@ -23,12 +23,6 @@ NSErrorUserInfoKey const MachExceptionType = @"type";
 NSErrorUserInfoKey const MachExceptionCode = @"code";
 NSErrorUserInfoKey const MachExceptionSubcode = @"subcode";
 
-@interface MachException: NSException
-@property exception_type_t type;
-@property mach_exception_data_type_t code;
-@property mach_exception_data_type_t subcode;
-@end
-
 @implementation MachException
 @end
 
@@ -280,11 +274,13 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     return true;
 }
 
+// Warning!
+// It seems that code coverage does not cover code in catch and finally blocks.
 - (BOOL) perform: (__attribute__((noescape)) void(^)(void)) tryBlock
          finally: (__attribute__((noescape)) void(^)(void)) finallyBlock
            error: (__autoreleasing NSError **) error
 {
-    NSException * exception;
+    //NSException * exception;
     @try {
         tryBlock();
         return YES;
@@ -295,7 +291,7 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
         };
         *error = [NSError errorWithDomain: exception.name code: exception.type userInfo: userInfo];
         return NO;
-    } @catch (id ue) {
+    } @catch (NSException * exception) {
         *error = [NSError errorWithDomain: exception.name code: 0 userInfo: nil];
         return NO;
     } @finally {
