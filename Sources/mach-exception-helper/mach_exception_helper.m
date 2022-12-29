@@ -32,6 +32,8 @@ NSErrorUserInfoKey const MachExceptionSubcode = @"subcode";
 @implementation MachException
 @end
 
+// MARK: - exc_handler
+
 static void exc_handler(exception_type_t type, mach_exception_data_type_t code, mach_exception_data_t subcode) {
     MachException * mach_exception = [[MachException alloc]
                                       initWithName: MachExceptionErrorDomain
@@ -43,6 +45,7 @@ static void exc_handler(exception_type_t type, mach_exception_data_type_t code, 
     @throw mach_exception;
 }
 
+// MARK: - catch_mach_exception_raise
 kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
                                          mach_port_t thread,
                                          mach_port_t task,
@@ -52,6 +55,8 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
     fprintf(stderr, "catch_mach_exception_raise called\n");
     return KERN_NOT_SUPPORTED;
 }
+
+// MARK: - catch_mach_exception_raise_state
 
 kern_return_t catch_mach_exception_raise_state(mach_port_t exception_port,
                                                exception_type_t exception,
@@ -75,6 +80,8 @@ kern_return_t catch_mach_exception_raise_state(mach_port_t exception_port,
 #else
 #error Unsupported architecture
 #endif
+
+// MARK: - catch_mach_exception_raise_state_identity
 
 kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_port,
                                                         mach_port_t thread,
@@ -105,7 +112,7 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     // Note: stateCnt specifies the size of the state in 4-byte words.
     memcpy((void *) new_state, (void *) old_state, x86_THREAD_STATE64_COUNT * 4);
     *new_stateCnt = old_stateCnt;
-// NEED TO TEST THIS ON A MACHINE WITH AN x86_64 PROCESSOR
+    // NEED TO TEST THIS ON A MACHINE WITH AN x86_64 PROCESSOR
     new_thread_state->__rsp -= sizeof(__uint64_t);
     __uint64_t * rsp = (__uint64_t *) new_thread_state->__rsp;
     *rsp = old_thread_state->__rip;
@@ -117,7 +124,57 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     return KERN_SUCCESS;
 }
 
-//
+// MARK: - MachExceptionHelperDependenciesDefault
+
+@implementation MachExceptionHelperDependenciesDefault
+
+- (BOOL) super_init_fail
+{
+    return false;
+}
+
+- (kern_return_t) port_allocate: (ipc_space_t) space
+                          right: (mach_port_right_t) right
+                           name: (mach_port_name_t *) name
+{
+    return mach_port_allocate(space, right, name);
+}
+
+- (kern_return_t) port_insert_right: (ipc_space_t) space
+                               name: (mach_port_name_t) name
+                               port: (mach_port_t) poly
+                           polyPoly: (mach_msg_type_name_t) polyPoly
+{
+    return mach_port_insert_right(space, name, poly, polyPoly);
+}
+
+- (kern_return_t) swap_exception_ports: (thread_t) thread
+                        exception_mask: (exception_mask_t) exception_mask
+                              new_port: (mach_port_t) new_port
+                          new_behavior: (exception_behavior_t) new_behavior
+                            new_flavor: (thread_state_flavor_t) new_flavor
+                                 masks: (exception_mask_array_t) masks
+                              CountCnt: (mach_msg_type_number_t *) CountCnt
+                                 ports: (exception_port_array_t) ports
+                             behaviors: (exception_behavior_array_t) behaviors
+                               flavors: (thread_state_flavor_array_t) flavors
+{
+    return thread_swap_exception_ports(thread,
+                                       exception_mask,
+                                       new_port,
+                                       new_behavior,
+                                       new_flavor,
+                                       masks,
+                                       CountCnt,
+                                       ports,
+                                       behaviors,
+                                       flavors);
+}
+
+@end
+
+// MARK: - MachExceptionHelper
+
 @implementation MachExceptionHelper
 {
     mach_port_t port;
@@ -126,24 +183,34 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
     mach_port_t ports[EXC_TYPES_COUNT];
     exception_behavior_t behaviors[EXC_TYPES_COUNT];
     thread_state_flavor_t flavors[EXC_TYPES_COUNT];
+    id<MachExceptionHelperDependencies> dependencies;
 }
 
 - (instancetype _Nullable) initWithMask: (exception_mask_t) mask
+                           dependencies: (id<MachExceptionHelperDependencies>) helper_dependencies
                                   error: (NSError **) error
 {
+    dependencies = helper_dependencies;
+    if ([dependencies super_init_fail]) {
+        return nil;
+    }
     self = [super init];
     if (self) {
         _mask = mask;
         
         kern_return_t code;
-        
-        code = mach_port_allocate(mach_task_self_, MACH_PORT_RIGHT_RECEIVE, &port);
+        code = [dependencies port_allocate: mach_task_self_
+                                     right: MACH_PORT_RIGHT_RECEIVE
+                                      name: &port];
         if (code != KERN_SUCCESS) {
             *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
             return nil;
         }
         
-        code = mach_port_insert_right(mach_task_self_, port, port, MACH_MSG_TYPE_MAKE_SEND);
+        code = [dependencies port_insert_right: mach_task_self_
+                                          name: port
+                                          port: port
+                                      polyPoly: MACH_MSG_TYPE_MAKE_SEND];
         if (code != KERN_SUCCESS) {
             mach_port_deallocate(mach_task_self_, port);
             *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
@@ -157,39 +224,40 @@ kern_return_t catch_mach_exception_raise_state_identity(mach_port_t exception_po
 #else
 #error Unsupported architecture
 #endif
-        code = thread_swap_exception_ports(mach_thread_self(),
-                                         self.mask,
-                                         port,
-                                         EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES,
-                                         nativeThreadState,
-                                         masks,
-                                         &count,
-                                         ports,
-                                         behaviors,
-                                         flavors);
+        mach_msg_type_number_t count = EXC_TYPES_COUNT;
+        code = [dependencies swap_exception_ports: mach_thread_self()
+                                   exception_mask: self.mask
+                                         new_port: port
+                                     new_behavior: EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES
+                                       new_flavor: nativeThreadState
+                                            masks: masks
+                                         CountCnt: &count
+                                            ports: ports
+                                        behaviors: behaviors
+                                          flavors: flavors];
         if (code != KERN_SUCCESS) {
             mach_port_deallocate(mach_task_self_, port);
             *error = [NSError errorWithDomain: NSMachErrorDomain code:code userInfo: nil];
             return nil;
         }
+        
+        *error = nil;
     }
-    
-    *error = nil;
     return self;
 }
 
 - (void) dealloc
 {
     thread_swap_exception_ports(mach_thread_self(),
-                              self.mask,
-                              0,
-                              EXCEPTION_DEFAULT,
-                              THREAD_STATE_NONE,
-                              masks,
-                              &count,
-                              ports,
-                              behaviors,
-                              flavors);
+                                self.mask,
+                                0,
+                                EXCEPTION_DEFAULT,
+                                THREAD_STATE_NONE,
+                                masks,
+                                &count,
+                                ports,
+                                behaviors,
+                                flavors);
     
     mach_port_deallocate(mach_task_self_, port);
 }

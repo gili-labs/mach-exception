@@ -14,10 +14,11 @@ import mach_exception_helper
 ///
 public func withUnsafeMachException(types: MachExceptionTypes,
                                     listenerTimeout timeout: mach_msg_timeout_t = 10,
+                                    dependencies: MachExceptionHelperDependencies = MachExceptionHelperDependenciesDefault(),
                                     operation: @escaping () -> (),
                                     finally: @escaping () -> () = { () in }) throws
 {
-    let helper = try MachExceptionHelper(mask: types.exceptionMask)
+    let helper = try MachExceptionHelper(mask: types.exceptionMask, dependencies: dependencies)
     
     let previousExclusivity = _swift_disableExclusivityChecking
     let previousReporting = _swift_reportFatalErrorsToDebugger
